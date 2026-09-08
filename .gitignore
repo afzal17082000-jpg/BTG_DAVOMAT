@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Secrets — real values live in .env locally and in Render's Environment tab.
+# Only .env.example (with placeholder values) should ever be committed.
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS/editor junk
+.DS_Store
+.vscode/
+.idea/

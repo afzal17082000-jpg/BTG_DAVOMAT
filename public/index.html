@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>BTG Davomat</title>
+
+<!--
+  We use Telegram's official telegram-web-app.js (the vanilla script the
+  @telegram-apps/sdk package itself wraps) rather than the npm SDK, because
+  this Mini App ships as a single static HTML file with no build step.
+  Docs: https://core.telegram.org/bots/webapps
+-->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+
+<style>
+  /* ============================================================
+     DESIGN TOKENS
+     Subject: a factory floor time-clock, used one-handed on a
+     phone inside Telegram. Treated like an industrial HUD/gauge
+     panel, not a generic SaaS dashboard: dark charcoal base,
+     hazard-amber accent for the primary action, hairline borders
+     instead of drop shadows, tabular numerals for all figures.
+     ============================================================ */
+  :root{
+    --bg: #14171c;
+    --surface: #1c2129;
+    --surface-2: #232a34;
+    --line: #323a46;
+    --text: #edeff2;
+    --text-dim: #97a1ad;
+    --text-faint: #626c78;
+    --amber: #ff8a24;
+    --amber-dim: #4a3018;
+    --green: #34d399;
+    --green-dim: #123328;
+    --red: #f0654b;
+    --red-dim: #3a1f1a;
+    --radius: 14px;
+    --radius-lg: 22px;
+  }
+
+  *{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html,body{ margin:0; padding:0; }
+  body{
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    padding-bottom: 32px;
+  }
+  .num{ font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    padding: 18px 20px 10px;
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .brand{ display:flex; flex-direction:column; gap:2px; }
+  .brand .name{ font-size: 19px; font-weight:800; letter-spacing:-0.01em; }
+  .brand .dept{ font-size: 13px; color: var(--text-dim); font-weight:600; }
+  .brand .dept::before{ content:"● "; color: var(--amber); }
+  .avatar{
+    width:40px; height:40px; border-radius:50%;
+    background: var(--surface-2); border:1px solid var(--line);
+    display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:15px; color: var(--text-dim);
+  }
+
+  /* ---------- Tabs ---------- */
+  .tabs{ display:flex; gap:6px; padding: 6px 20px 18px; }
+  .tab{
+    flex:1; text-align:center; padding:9px 4px; border-radius: 10px;
+    font-size: 13px; font-weight:700; color: var(--text-faint);
+    border: 1px solid transparent; cursor:pointer; user-select:none;
+  }
+  .tab.active{ background: var(--surface); color: var(--text); border-color: var(--line); }
+
+  .view{ display:none; padding: 0 20px; }
+  .view.active{ display:block; }
+
+  /* ---------- Punch-clock hero ---------- */
+  .clock-card{
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    padding: 26px 20px 24px;
+    text-align:center;
+    margin-bottom: 16px;
+  }
+  .clock-status{
+    font-size: 12px; font-weight:700; letter-spacing:0.02em;
+    color: var(--text-dim); margin-bottom: 6px;
+  }
+  .clock-time{
+    font-size: 44px; font-weight:800; letter-spacing:-0.02em;
+    margin: 2px 0 4px;
+  }
+  .clock-sub{ font-size: 13px; color: var(--text-faint); margin-bottom: 20px; min-height:16px; }
+
+  .punch-btn{
+    width: 168px; height: 168px; border-radius: 50%;
+    border: none; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:4px;
+    font-family: inherit; font-weight:800; font-size: 17px; letter-spacing:0.01em;
+    margin: 0 auto;
+    background: var(--amber);
+    color: #1a1206;
+    box-shadow: 0 0 0 6px var(--amber-dim);
+    transition: transform 0.12s ease;
+  }
+  .punch-btn:active{ transform: scale(0.96); }
+  .punch-btn.checkout{ background: var(--surface-2); color: var(--text); box-shadow: 0 0 0 6px rgba(255,255,255,0.04); border: 2px solid var(--red); }
+  .punch-btn.done{ background: var(--surface-2); color: var(--text-faint); box-shadow:none; border: 2px solid var(--line); cursor:default; }
+  .punch-btn:disabled{ opacity:0.55; cursor:not-allowed; }
+  .punch-btn .icon{ font-size: 26px; line-height:1; }
+
+  .gps-readout{
+    margin-top: 18px; font-size: 12.5px; color: var(--text-faint);
+    display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .gps-dot{ width:7px; height:7px; border-radius:50%; background: var(--text-faint); }
+  .gps-dot.ok{ background: var(--green); }
+  .gps-dot.bad{ background: var(--red); }
+
+  /* ---------- Info banner ---------- */
+  .banner{
+    border-radius: var(--radius); padding: 12px 14px; font-size: 13.5px;
+    margin-bottom: 16px; border: 1px solid; line-height:1.45;
+  }
+  .banner.warn{ background: var(--amber-dim); border-color: #6b471f; color: #ffcf9c; }
+  .banner.err{ background: var(--red-dim); border-color: #6b3227; color: #ffb3a3; }
+  .banner.info{ background: var(--surface-2); border-color: var(--line); color: var(--text-dim); }
+
+  /* ---------- Day summary rows ---------- */
+  .row-card{
+    background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+    padding: 14px 16px; display:flex; justify-content:space-between; align-items:center;
+    margin-bottom: 10px;
+  }
+  .row-label{ font-size:13px; color: var(--text-dim); font-weight:600; }
+  .row-value{ font-size:15px; font-weight:800; }
+  .row-value.amber{ color: var(--amber); }
+  .row-value.green{ color: var(--green); }
+
+  /* ---------- Stats grid ---------- */
+  .month-nav{
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 4px 2px 16px;
+  }
+  .month-nav button{
+    width:34px; height:34px; border-radius:10px; border:1px solid var(--line);
+    background: var(--surface); color: var(--text); font-size:16px; cursor:pointer;
+  }
+  .month-nav .label{ font-weight:800; font-size:15px; }
+
+  .stat-grid{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 18px; }
+  .stat-box{
+    background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+    padding: 14px;
+    border-left: 3px solid var(--line);
+  }
+  .stat-box.hi{ border-left-color: var(--amber); }
+  .stat-box .label{ font-size:12px; color: var(--text-faint); font-weight:700; margin-bottom:6px; }
+  .stat-box .value{ font-size:20px; font-weight:800; }
+  .stat-box .value.money{ color: var(--amber); }
+
+  .section-title{ font-size:14px; font-weight:800; color: var(--text-dim); margin: 6px 0 10px; }
+
+  .day-item{
+    background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+    padding: 12px 14px; margin-bottom: 8px;
+  }
+  .day-item .top{ display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
+  .day-item .date{ font-weight:700; font-size:13.5px; }
+  .day-item .money{ font-weight:800; font-size:13.5px; color: var(--amber); }
+  .day-item .meta{ font-size:12px; color: var(--text-faint); display:flex; gap:10px; flex-wrap:wrap; }
+  .day-item .tag{
+    font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:6px;
+    background: var(--amber-dim); color: #ffcf9c;
+  }
+
+  .export-btn{
+    width:100%; padding:14px; border-radius: var(--radius); border:1px solid var(--line);
+    background: var(--surface); color: var(--text); font-family:inherit; font-weight:700; font-size:14px;
+    cursor:pointer; margin-top: 6px; margin-bottom: 24px;
+  }
+
+  .empty{ text-align:center; color: var(--text-faint); font-size:13.5px; padding: 28px 10px; }
+
+  /* ---------- Reason modal ---------- */
+  .overlay{
+    position:fixed; inset:0; background: rgba(6,8,10,0.65);
+    display:none; align-items:flex-end; justify-content:center; z-index:50;
+  }
+  .overlay.open{ display:flex; }
+  .modal{
+    width:100%; max-width: 480px; background: var(--surface);
+    border-radius: 20px 20px 0 0; border: 1px solid var(--line); border-bottom:none;
+    padding: 22px 20px 26px;
+  }
+  .modal h3{ margin:0 0 6px; font-size:17px; font-weight:800; }
+  .modal p{ margin:0 0 14px; font-size:13.5px; color: var(--text-dim); line-height:1.45; }
+  .modal textarea{
+    width:100%; min-height:88px; resize:vertical;
+    background: var(--surface-2); border:1px solid var(--line); border-radius: 10px;
+    color: var(--text); font-family:inherit; font-size:14px; padding:12px;
+  }
+  .modal textarea:focus{ outline:none; border-color: var(--amber); }
+  .modal-actions{ display:flex; gap:10px; margin-top:16px; }
+  .modal-actions button{
+    flex:1; padding:13px; border-radius:10px; border:none; font-family:inherit;
+    font-weight:700; font-size:14px; cursor:pointer;
+  }
+  .btn-cancel{ background: var(--surface-2); color: var(--text-dim); }
+  .btn-confirm{ background: var(--amber); color: #1a1206; }
+  .btn-confirm:disabled{ opacity:0.5; }
+
+  .loading-veil{
+    position:fixed; inset:0; background: rgba(6,8,10,0.45);
+    display:none; align-items:center; justify-content:center; z-index:60;
+  }
+  .loading-veil.open{ display:flex; }
+  .spinner{
+    width:34px; height:34px; border-radius:50%;
+    border: 3px solid var(--surface-2); border-top-color: var(--amber);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  .not-registered{
+    margin: 60px 20px; text-align:center; color: var(--text-dim); font-size:14px; line-height:1.6;
+  }
+  .not-registered code{ background: var(--surface-2); padding:2px 6px; border-radius:6px; color: var(--amber); }
+</style>
+</head>
+<body>
+
+  <div id="app" style="display:none;">
+    <div class="topbar">
+      <div class="brand">
+        <div class="name" id="empName">—</div>
+        <div class="dept" id="empDept">—</div>
+      </div>
+      <div class="avatar" id="avatarInitials">--</div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-view="clock">Davomat</div>
+      <div class="tab" data-view="stats">Statistika</div>
+      <div class="tab" id="adminTab" data-view="admin" style="display:none;">Admin</div>
+    </div>
+
+    <!-- ================= CLOCK VIEW ================= -->
+    <div class="view active" id="view-clock">
+      <div id="clockBanner"></div>
+
+      <div class="clock-card">
+        <div class="clock-status" id="clockStatusLabel">HOLAT</div>
+        <div class="clock-time num" id="clockTime">--:--</div>
+        <div class="clock-sub" id="clockSub"></div>
+
+        <button class="punch-btn" id="punchBtn">
+          <span class="icon">⏱</span>
+          <span id="punchBtnLabel">KELISH</span>
+        </button>
+
+        <div class="gps-readout">
+          <span class="gps-dot" id="gpsDot"></span>
+          <span id="gpsText">GPS aniqlanmoqda...</span>
+        </div>
+      </div>
+
+      <div id="todayDetail"></div>
+    </div>
+
+    <!-- ================= STATS VIEW ================= -->
+    <div class="view" id="view-stats">
+      <div class="month-nav">
+        <button id="monthPrev">‹</button>
+        <div class="label" id="monthLabel">—</div>
+        <button id="monthNext">›</button>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-box hi">
+          <div class="label">Jami maosh</div>
+          <div class="value money num" id="statSalary">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Ishlagan kunlar</div>
+          <div class="value num" id="statDays">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Oddiy soatlar</div>
+          <div class="value num" id="statRegular">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="label">Qo'shimcha soatlar</div>
+          <div class="value num" id="statOvertime">0</div>
+        </div>
+      </div>
+
+      <div class="section-title">Kunlar bo'yicha</div>
+      <div id="dayList"></div>
+
+      <button class="export-btn" id="exportBtn">⬇ Excel hisobotni yuklab olish</button>
+    </div>
+
+    <!-- ================= ADMIN VIEW ================= -->
+    <div class="view" id="view-admin">
+      <div class="month-nav">
+        <button id="adminMonthPrev">‹</button>
+        <div class="label" id="adminMonthLabel">—</div>
+        <button id="adminMonthNext">›</button>
+      </div>
+      <div class="section-title">Bo'limlar bo'yicha</div>
+      <div id="deptList"></div>
+      <div class="section-title">Xodimlar bo'yicha</div>
+      <div id="empList"></div>
+      <button class="export-btn" id="adminExportBtn">⬇ Umumiy Excel hisobot</button>
+    </div>
+  </div>
+
+  <div class="not-registered" id="notRegistered" style="display:none;">
+    ⚠️ Siz tizimda ro'yxatdan o'tmagansiz.<br/><br/>
+    Administratorga quyidagi Telegram ID'ingizni yuboring:<br/>
+    <code id="myTgId">—</code>
+  </div>
+
+  <!-- Reason modal (late check-in / overtime check-out) -->
+  <div class="overlay" id="reasonOverlay">
+    <div class="modal">
+      <h3 id="reasonTitle">Sabab kiriting</h3>
+      <p id="reasonSubtitle">Iltimos, izoh yozing.</p>
+      <textarea id="reasonInput" placeholder="Masalan: transport tirbandligi tufayli..."></textarea>
+      <div class="modal-actions">
+        <button class="btn-cancel" id="reasonCancel">Bekor qilish</button>
+        <button class="btn-confirm" id="reasonConfirm" disabled>Tasdiqlash</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading-veil" id="loadingVeil"><div class="spinner"></div></div>
+
+<script>
+(function(){
+  'use strict';
+
+  // ============================================================
+  // Telegram WebApp bootstrap
+  // ============================================================
+  const tg = window.Telegram && window.Telegram.WebApp;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    tg.setHeaderColor && tg.setHeaderColor('#14171c');
+    tg.setBackgroundColor && tg.setBackgroundColor('#14171c');
+  }
+  const initData = tg ? tg.initData : '';
+
+  // ============================================================
+  // Tiny fetch helper — attaches the Telegram auth header to every call
+  // ============================================================
+  async function api(path, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Telegram-Init-Data': initData,
+        ...(options.headers || {}),
+      },
+    });
+    const isJson = (res.headers.get('content-type') || '').includes('application/json');
+    const body = isJson ? await res.json() : await res.blob();
+    if (!res.ok) {
+      const err = new Error((isJson && body.message) || 'Xatolik yuz berdi');
+      err.code = isJson ? body.error : 'unknown';
+      err.extra = body;
+      throw err;
+    }
+    return body;
+  }
+
+  function showLoading(on){ document.getElementById('loadingVeil').classList.toggle('open', on); }
+
+  function fmtMoney(n){ return Math.round(n).toLocaleString('ru-RU') + " so'm"; }
+  function fmtHours(n){ return Number(n).toFixed(2) + ' soat'; }
+  function fmtTime(iso){
+    if (!iso) return '--:--';
+    const d = new Date(iso);
+    return d.toTimeString().slice(0,5);
+  }
+  function fmtDate(iso){
+    const d = new Date(iso);
+    const days = ["Yak","Dush","Sesh","Chor","Pay","Jum","Shan"];
+    return `${days[d.getDay()]}, ${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+
+  // ============================================================
+  // State
+  // ============================================================
+  let me = null;               // /api/me response
+  let lastCoords = null;       // { lat, lng, accuracy } - cached from most recent GPS read
+  let pendingAction = null;    // 'checkin' | 'checkout' — which action the reason modal is for
+  let statsMonth = currentMonth();
+  let adminMonth = currentMonth();
+
+  function currentMonth(){
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+  function shiftMonth(m, delta){
+    const [y, mo] = m.split('-').map(Number);
+    const d = new Date(y, mo - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  }
+  function monthLabel(m){
+    const names = ['Yanvar','Fevral','Mart','Aprel','May','Iyun','Iyul','Avgust','Sentabr','Oktabr','Noyabr','Dekabr'];
+    const [y, mo] = m.split('-').map(Number);
+    return `${names[mo-1]} ${y}`;
+  }
+
+  // ============================================================
+  // GPS acquisition
+  // Prefers Telegram's native LocationManager (Bot API 8.0+) — it runs
+  // inside the Telegram client's own sandbox and is meaningfully harder
+  // to spoof from a random installed app than the plain browser API.
+  // Falls back to navigator.geolocation for older clients / desktop testing.
+  // ============================================================
+  function getLocation() {
+    return new Promise((resolve, reject) => {
+      if (tg && tg.LocationManager) {
+        try {
+          tg.LocationManager.init(() => {
+            tg.LocationManager.getLocation((data) => {
+              if (!data) return reject(new Error('location_denied'));
+              resolve({ lat: data.latitude, lng: data.longitude, accuracy: data.horizontal_accuracy || 30 });
+            });
+          });
+          return;
+        } catch (e) { /* fall through to browser geolocation */ }
+      }
+
+      if (!navigator.geolocation) return reject(new Error('geolocation_unsupported'));
+      navigator.geolocation.getCurrentPosition(
+        (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy }),
+        (err) => reject(err),
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+  }
+
+  async function refreshGps() {
+    const gpsDot = document.getElementById('gpsDot');
+    const gpsText = document.getElementById('gpsText');
+    try {
+      const loc = await getLocation();
+      lastCoords = loc;
+      const goodAccuracy = loc.accuracy && loc.accuracy <= (me?.geofence?.maxAccuracyM || 100);
+      gpsDot.className = 'gps-dot ' + (goodAccuracy ? 'ok' : 'bad');
+      gpsText.textContent = `GPS aniqlik: \u00b1${Math.round(loc.accuracy)} m`;
+      return loc;
+    } catch (e) {
+      gpsDot.className = 'gps-dot bad';
+      gpsText.textContent = 'GPS mavjud emas. Joylashuvni yoqing.';
+      lastCoords = null;
+      throw e;
+    }
+  }
+
+  // ============================================================
+  // Rendering: Clock view
+  // ============================================================
+  function renderClock() {
+    const today = me.today;
+    const label = document.getElementById('clockStatusLabel');
+    const time = document.getElementById('clockTime');
+    const sub = document.getElementById('clockSub');
+    const btn = document.getElementById('punchBtn');
+    const btnLabel = document.getElementById('punchBtnLabel');
+    const detail = document.getElementById('todayDetail');
+    const banner = document.getElementById('clockBanner');
+    banner.innerHTML = '';
+    detail.innerHTML = '';
+
+    if (!today || !today.checkIn) {
+      label.textContent = 'HOLAT: KELMAGAN';
+      time.textContent = nowClock();
+      sub.textContent = `Ish vaqti: ${me.workSchedule.start} — ${me.workSchedule.end}`;
+      btn.className = 'punch-btn';
+      btn.disabled = false;
+      btnLabel.textContent = 'KELISH';
+      btn.onclick = () => handlePunch('checkin');
+    } else if (today.checkIn && !today.checkOut) {
+      label.textContent = 'HOLAT: ISHDA';
+      time.textContent = fmtTime(today.checkIn);
+      sub.textContent = today.lateReason ? `Kech qolish sababi: ${today.lateReason}` : 'Kelgan vaqt';
+      btn.className = 'punch-btn checkout';
+      btn.disabled = false;
+      btnLabel.textContent = 'KETISH';
+      btn.onclick = () => handlePunch('checkout');
+      if (today.lateReason) {
+        banner.innerHTML = bannerHtml('warn', `⏰ Bugun kech qoldingiz. Sabab qayd etildi.`);
+      }
+    } else {
+      label.textContent = 'HOLAT: TUGALLANDI';
+      time.textContent = fmtTime(today.checkOut);
+      sub.textContent = 'Bugungi ish yakunlandi';
+      btn.className = 'punch-btn done';
+      btn.disabled = true;
+      btnLabel.textContent = 'BAJARILDI';
+      btn.onclick = null;
+
+      detail.innerHTML = `
+        <div class="row-card"><span class="row-label">Kelgan / Ketgan</span><span class="row-value num">${fmtTime(today.checkIn)} — ${fmtTime(today.checkOut)}</span></div>
+        <div class="row-card"><span class="row-label">Oddiy soatlar</span><span class="row-value num">${fmtHours(today.regularHours)}</span></div>
+        <div class="row-card"><span class="row-label">Qo'shimcha soatlar</span><span class="row-value amber num">${fmtHours(today.overtimeHours)}</span></div>
+        <div class="row-card"><span class="row-label">Bugungi maosh</span><span class="row-value green num">${fmtMoney(today.dailySalary)}</span></div>
+      `;
+      if (today.overtimeReason) {
+        banner.innerHTML = bannerHtml('info', `➕ Qo'shimcha ish sababi: ${today.overtimeReason}`);
+      }
+    }
+  }
+
+  function nowClock(){
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+  }
+  function bannerHtml(kind, text){
+    return `<div class="banner ${kind}">${text}</div>`;
+  }
+
+  // Live clock tick while idle/waiting for check-in, purely cosmetic.
+  setInterval(() => {
+    if (me && (!me.today || !me.today.checkIn)) {
+      const el = document.getElementById('clockTime');
+      if (el) el.textContent = nowClock();
+    }
+  }, 1000 * 15);
+
+  // ============================================================
+  // Punch actions (check-in / check-out) with mandatory-reason flow
+  // ============================================================
+  async function handlePunch(action) {
+    const btn = document.getElementById('punchBtn');
+    btn.disabled = true;
+    showLoading(true);
+    try {
+      await refreshGps();
+    } catch (e) {
+      showLoading(false);
+      btn.disabled = false;
+      tgAlert("Joylashuvni aniqlab bo'lmadi. GPS'ni yoqib, ruxsat berib qayta urinib ko'ring.");
+      return;
+    }
+    showLoading(false);
+    btn.disabled = false;
+    await submitPunch(action, {});
+  }
+
+  async function submitPunch(action, extra) {
+    if (!lastCoords) return tgAlert('Joylashuv topilmadi.');
+    const payload = { lat: lastCoords.lat, lng: lastCoords.lng, accuracy: lastCoords.accuracy, ...extra };
+
+    showLoading(true);
+    try {
+      const result = await api(`/api/${action}`, { method: 'POST', body: JSON.stringify(payload) });
+      showLoading(false);
+
+      if (action === 'checkin' && result.late) {
+        tgAlert("Kelganingiz qayd etildi. Kech qolganingiz uchun sabab saqlandi.");
+      } else if (action === 'checkout' && result.overtime) {
+        tgAlert(`Ketganingiz qayd etildi. Bugungi maosh: ${fmtMoney(result.dailySalary)}`);
+      } else if (action === 'checkout') {
+        tgAlert(`Bugungi maosh: ${fmtMoney(result.dailySalary)}`);
+      } else {
+        tgAlert('Kelganingiz muvaffaqiyatli qayd etildi.');
+      }
+
+      await loadMe();
+    } catch (e) {
+      showLoading(false);
+      if (e.code === 'late_reason_required') {
+        openReasonModal('checkin', {
+          title: 'Kech qoldingiz',
+          subtitle: `Ish boshlanish vaqti ${me.workSchedule.start}. Kechikish sababini yozing — bu kelishni qayd etish uchun majburiy.`,
+        });
+      } else if (e.code === 'overtime_reason_required') {
+        openReasonModal('checkout', {
+          title: "Qo'shimcha ish vaqti",
+          subtitle: `Ish tugash vaqti ${me.workSchedule.end}. Qo'shimcha ishlagan vaqtingiz sababini yozing — bu ketishni qayd etish uchun majburiy.`,
+        });
+      } else if (e.code === 'geofence_failed') {
+        tgAlert(e.message || 'Siz korxona hududidan tashqaridasiz.');
+      } else {
+        tgAlert(e.message || 'Xatolik yuz berdi.');
+      }
+    }
+  }
+
+  function tgAlert(msg){
+    if (tg && tg.showAlert) tg.showAlert(msg);
+    else alert(msg);
+  }
+
+  // ---- Reason modal wiring ----
+  const overlay = document.getElementById('reasonOverlay');
+  const reasonInput = document.getElementById('reasonInput');
+  const reasonConfirm = document.getElementById('reasonConfirm');
+
+  function openReasonModal(action, { title, subtitle }) {
+    pendingAction = action;
+    document.getElementById('reasonTitle').textContent = title;
+    document.getElementById('reasonSubtitle').textContent = subtitle;
+    reasonInput.value = '';
+    reasonConfirm.disabled = true;
+    overlay.classList.add('open');
+    setTimeout(() => reasonInput.focus(), 150);
+  }
+  reasonInput.addEventListener('input', () => {
+    reasonConfirm.disabled = reasonInput.value.trim().length < 3;
+  });
+  document.getElementById('reasonCancel').onclick = () => {
+    overlay.classList.remove('open');
+    pendingAction = null;
+  };
+  reasonConfirm.onclick = async () => {
+    const text = reasonInput.value.trim();
+    if (text.length < 3) return;
+    overlay.classList.remove('open');
+    const action = pendingAction;
+    pendingAction = null;
+    const extraKey = action === 'checkin' ? 'lateReason' : 'overtimeReason';
+    await submitPunch(action, { [extraKey]: text });
+  };
+
+  // ============================================================
+  // Stats view
+  // ============================================================
+  async function loadStats() {
+    document.getElementById('monthLabel').textContent = monthLabel(statsMonth);
+    const data = await api(`/api/dashboard?month=${statsMonth}`);
+
+    document.getElementById('statSalary').textContent = fmtMoney(data.totals.salary);
+    document.getElementById('statDays').textContent = data.totals.daysWorked;
+    document.getElementById('statRegular').textContent = fmtHours(data.totals.regularHours);
+    document.getElementById('statOvertime').textContent = fmtHours(data.totals.overtimeHours);
+
+    const list = document.getElementById('dayList');
+    if (data.records.length === 0) {
+      list.innerHTML = '<div class="empty">Bu oyda davomat yozuvlari yo\'q.</div>';
+      return;
+    }
+    list.innerHTML = data.records.slice().reverse().map((r) => `
+      <div class="day-item">
+        <div class="top">
+          <span class="date">${fmtDate(r.date)}</span>
+          <span class="money num">${fmtMoney(r.dailySalary)}</span>
+        </div>
+        <div class="meta">
+          <span>${fmtTime(r.checkIn)} — ${fmtTime(r.checkOut)}</span>
+          <span>${fmtHours(r.regularHours)}${r.overtimeHours > 0 ? ' + ' + fmtHours(r.overtimeHours) + ' OT' : ''}</span>
+          ${r.lateReason ? '<span class="tag">Kech qolgan</span>' : ''}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  document.getElementById('monthPrev').onclick = () => { statsMonth = shiftMonth(statsMonth, -1); loadStats(); };
+  document.getElementById('monthNext').onclick = () => { statsMonth = shiftMonth(statsMonth, 1); loadStats(); };
+
+  document.getElementById('exportBtn').onclick = () => downloadExcel(`/api/export-excel?month=${statsMonth}`, `Davomat_${statsMonth}.xlsx`);
+
+  // ============================================================
+  // Admin view
+  // ============================================================
+  async function loadAdmin() {
+    document.getElementById('adminMonthLabel').textContent = monthLabel(adminMonth);
+    const data = await api(`/api/admin/dashboard?month=${adminMonth}`);
+
+    const deptList = document.getElementById('deptList');
+    deptList.innerHTML = Object.values(data.departments).map((d) => `
+      <div class="row-card">
+        <span class="row-label">${d.label} (${d.employees})</span>
+        <span class="row-value amber num">${fmtMoney(d.salary)}</span>
+      </div>
+    `).join('') || '<div class="empty">Ma\'lumot yo\'q.</div>';
+
+    const empList = document.getElementById('empList');
+    empList.innerHTML = data.employees.map((e) => `
+      <div class="day-item">
+        <div class="top">
+          <span class="date">${e.fullName}</span>
+          <span class="money num">${fmtMoney(e.totalSalary)}</span>
+        </div>
+        <div class="meta">
+          <span>${e.daysWorked} kun</span>
+          <span>${fmtHours(e.totalRegularHours)} + ${fmtHours(e.totalOvertimeHours)} OT</span>
+        </div>
+      </div>
+    `).join('') || '<div class="empty">Ma\'lumot yo\'q.</div>';
+  }
+  document.getElementById('adminMonthPrev').onclick = () => { adminMonth = shiftMonth(adminMonth, -1); loadAdmin(); };
+  document.getElementById('adminMonthNext').onclick = () => { adminMonth = shiftMonth(adminMonth, 1); loadAdmin(); };
+  document.getElementById('adminExportBtn').onclick = () => downloadExcel(`/api/export-excel?month=${adminMonth}`, `BTG_Davomat_${adminMonth}.xlsx`);
+
+  // ============================================================
+  // Excel download helper (blob -> temporary link click)
+  // ============================================================
+  async function downloadExcel(url, filename) {
+    showLoading(true);
+    try {
+      const blob = await api(url);
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (e) {
+      tgAlert("Hisobotni yuklab bo'lmadi. Botda /export_excel buyrug'ini sinab ko'ring.");
+    } finally {
+      showLoading(false);
+    }
+  }
+
+  // ============================================================
+  // Tabs
+  // ============================================================
+  document.querySelectorAll('.tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tab').forEach((t) => t.classList.remove('active'));
+      document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
+      tab.classList.add('active');
+      const view = tab.dataset.view;
+      document.getElementById('view-' + view).classList.add('active');
+      if (view === 'stats') loadStats();
+      if (view === 'admin') loadAdmin();
+    });
+  });
+
+  // ============================================================
+  // Bootstrap
+  // ============================================================
+  async function loadMe() {
+    me = await api('/api/me');
+    document.getElementById('empName').textContent = me.employee.fullName;
+    document.getElementById('empDept').textContent = me.employee.departmentLabel;
+    document.getElementById('avatarInitials').textContent = initials(me.employee.fullName);
+    if (me.isAdmin) document.getElementById('adminTab').style.display = 'block';
+    renderClock();
+  }
+  function initials(name){
+    return name.split(' ').filter(Boolean).slice(0,2).map(s => s[0]).join('').toUpperCase();
+  }
+
+  async function bootstrap() {
+    if (!initData) {
+      // Running outside Telegram (e.g. opened directly in a browser) — cannot authenticate.
+      document.getElementById('notRegistered').style.display = 'block';
+      document.getElementById('notRegistered').innerHTML =
+        'Bu ilova faqat Telegram ichida ishlaydi. Botni oching va "Davomatni belgilash" tugmasini bosing.';
+      return;
+    }
+    try {
+      await loadMe();
+      document.getElementById('app').style.display = 'block';
+      refreshGps().catch(() => {}); // best-effort early GPS warm-up, errors surfaced only on punch
+    } catch (e) {
+      if (e.code === 'not_registered') {
+        document.getElementById('notRegistered').style.display = 'block';
+        const idEl = document.getElementById('myTgId');
+        try {
+          const u = JSON.parse(new URLSearchParams(initData).get('user'));
+          idEl.textContent = u.id;
+        } catch { idEl.textContent = '?'; }
+      } else {
+        document.getElementById('notRegistered').style.display = 'block';
+        document.getElementById('notRegistered').textContent = "Ulanishda xatolik. Qaytadan urinib ko'ring.";
+      }
+    }
+  }
+
+  bootstrap();
+})();
+</script>
+</body>
+</html>
